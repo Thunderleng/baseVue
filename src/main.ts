@@ -6,6 +6,7 @@ import 'virtual:unocss-devtools'
 // 你自定义的 css
 import './styles/main.css'
 
+import { createApp } from 'vue'
 import App from './App.vue'
 
 const app = createApp(App)

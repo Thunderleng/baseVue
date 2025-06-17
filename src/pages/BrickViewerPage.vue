@@ -1,12 +1,12 @@
 <template>
-	<div class="index-page">
+	<div class="brick-viewer-page">
 		<div
 			class="header from-blue-600 to-purple-600 bg-gradient-to-r p-6 text-white"
 		>
 			<div class="mx-auto max-w-7xl">
 				<h1 class="mb-2 text-3xl font-bold">🧱 3D 积木模型展示器</h1>
 				<p class="text-blue-100">
-					基于 Vue3 + Three.js 构建的高性能 3D 可视化项目
+					基于 Vue3 + Three.js + Tres.js 构建的高性能 3D 可视化项目
 				</p>
 			</div>
 		</div>
@@ -26,7 +26,7 @@ import BrickViewer from '@/components/BrickViewer.vue'
 </script>
 
 <style scoped>
-.index-page {
+.brick-viewer-page {
 	height: 100vh;
 	display: flex;
 	flex-direction: column;

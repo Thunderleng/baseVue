@@ -1,0 +1,242 @@
+<template>
+	<div
+		class="layer-controls rounded-lg bg-white/90 p-4 shadow-lg backdrop-blur-sm"
+	>
+		<div class="flex flex-col gap-4">
+			<!-- 层导航按钮 -->
+			<div class="flex items-center justify-between">
+				<button
+					:disabled="currentLayer <= 0"
+					class="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-blue-600"
+					@click="$emit('prev-layer')"
+				>
+					前一层
+				</button>
+
+				<span class="text-lg text-gray-700 font-semibold">
+					第 {{ currentLayer + 1 }} 层
+				</span>
+
+				<button
+					:disabled="currentLayer >= maxLayers - 1"
+					class="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-blue-600"
+					@click="$emit('next-layer')"
+				>
+					后一层
+				</button>
+			</div>
+
+			<!-- 滑动条控制 -->
+			<div class="border-t pt-4">
+				<h3 class="mb-3 text-lg text-gray-700 font-semibold">层数控制</h3>
+				<div class="flex items-center gap-3">
+					<button
+						:disabled="renderLayers <= 1"
+						class="rounded bg-orange-500 px-3 py-1 text-sm text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-orange-600"
+						@click="decreaseRenderLayers"
+					>
+						-
+					</button>
+
+					<div class="flex-1">
+						<input
+							type="range"
+							:min="1"
+							:max="maxLayers"
+							:value="renderLayers"
+							class="slider h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
+							@input="updateRenderLayers"
+						/>
+						<div class="mt-1 text-center text-sm text-gray-600">
+							渲染前 {{ renderLayers }} 层
+						</div>
+					</div>
+
+					<button
+						:disabled="renderLayers >= maxLayers"
+						class="rounded bg-orange-500 px-3 py-1 text-sm text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-orange-600"
+						@click="increaseRenderLayers"
+					>
+						+
+					</button>
+				</div>
+			</div>
+
+			<!-- 视角控制 -->
+			<div class="border-t pt-4">
+				<h3 class="mb-3 text-lg text-gray-700 font-semibold">视角控制</h3>
+				<div class="flex gap-2">
+					<button
+						class="rounded bg-green-500 px-3 py-2 text-sm text-white transition-colors hover:bg-green-600"
+						@click="$emit('reset-view')"
+					>
+						重置视角
+					</button>
+					<button
+						class="rounded bg-purple-500 px-3 py-2 text-sm text-white transition-colors hover:bg-purple-600"
+						@click="$emit('fit-view')"
+					>
+						适应视角
+					</button>
+				</div>
+			</div>
+
+			<!-- 层选择复选框 -->
+			<div class="border-t pt-4">
+				<h3 class="mb-3 text-lg text-gray-700 font-semibold">层选择</h3>
+				<div class="grid grid-cols-2 max-h-40 gap-2 overflow-y-auto">
+					<label
+						v-for="index in maxLayers"
+						:key="index - 1"
+						class="flex cursor-pointer items-center rounded p-2 space-x-2 hover:bg-gray-100"
+					>
+						<input
+							type="checkbox"
+							:checked="visibleLayers[index - 1]"
+							class="h-4 w-4 rounded text-blue-600 focus:ring-blue-500"
+							@change="$emit('toggle-layer', index - 1)"
+						/>
+						<span class="text-sm text-gray-700">第 {{ index }} 层</span>
+					</label>
+				</div>
+			</div>
+
+			<!-- 全选/取消全选 -->
+			<div class="flex gap-2">
+				<button
+					class="rounded bg-green-500 px-3 py-1 text-sm text-white transition-colors hover:bg-green-600"
+					@click="$emit('select-all')"
+				>
+					全选
+				</button>
+				<button
+					class="rounded bg-red-500 px-3 py-1 text-sm text-white transition-colors hover:bg-red-600"
+					@click="$emit('deselect-all')"
+				>
+					取消全选
+				</button>
+			</div>
+
+			<!-- 加载状态 -->
+			<div v-if="isLoading" class="text-center text-blue-600">
+				<div
+					class="mr-2 inline-block h-4 w-4 animate-spin border-2 border-blue-600 border-t-transparent rounded-full"
+				></div>
+				加载中...
+			</div>
+		</div>
+	</div>
+</template>
+
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+
+interface Props {
+	currentLayer: number
+	maxLayers: number
+	visibleLayers: boolean[]
+	isLoading?: boolean
+}
+
+const props = defineProps<Props>()
+
+const renderLayers = ref(1) // 默认渲染1层
+
+// 更新渲染层数
+function updateRenderLayers(event: Event) {
+	const target = event.target as HTMLInputElement
+	renderLayers.value = parseInt(target.value)
+	updateVisibleLayers()
+}
+
+// 增加渲染层数
+function increaseRenderLayers() {
+	if (renderLayers.value < props.maxLayers) {
+		renderLayers.value++
+		updateVisibleLayers()
+	}
+}
+
+// 减少渲染层数
+function decreaseRenderLayers() {
+	if (renderLayers.value > 1) {
+		renderLayers.value--
+		updateVisibleLayers()
+	}
+}
+
+// 更新可见层
+function updateVisibleLayers() {
+	const newVisibleLayers = new Array(props.maxLayers).fill(false)
+	for (let i = 0; i < renderLayers.value; i++) {
+		newVisibleLayers[i] = true
+	}
+	emit('update-render-layers', newVisibleLayers)
+}
+
+// 监听当前层变化，自动调整渲染层数
+watch(
+	() => props.currentLayer,
+	(newLayer) => {
+		if (newLayer >= renderLayers.value) {
+			renderLayers.value = newLayer + 1
+			updateVisibleLayers()
+		}
+	},
+)
+
+const emit = defineEmits<{
+	'prev-layer': []
+	'next-layer': []
+	'toggle-layer': [index: number]
+	'select-all': []
+	'deselect-all': []
+	'reset-view': []
+	'fit-view': []
+	'update-render-layers': [layers: boolean[]]
+}>()
+</script>
+
+<style scoped>
+.layer-controls {
+	position: absolute;
+	top: 20px;
+	left: 20px;
+	z-index: 1000;
+	min-width: 280px;
+}
+
+/* 滑动条样式 */
+.slider::-webkit-slider-thumb {
+	appearance: none;
+	height: 20px;
+	width: 20px;
+	border-radius: 50%;
+	background: #3b82f6;
+	cursor: pointer;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.slider::-moz-range-thumb {
+	height: 20px;
+	width: 20px;
+	border-radius: 50%;
+	background: #3b82f6;
+	cursor: pointer;
+	border: none;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.slider::-webkit-slider-track {
+	background: #e5e7eb;
+	border-radius: 10px;
+	height: 8px;
+}
+
+.slider::-moz-range-track {
+	background: #e5e7eb;
+	border-radius: 10px;
+	height: 8px;
+	border: none;
+}
+</style>
