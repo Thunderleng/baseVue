@@ -79,7 +79,7 @@ export function editorToViewer(editorBrick: EditorBrickData): ViewerBrickData {
  */
 export function viewerLayersToEditor(viewerData: ViewerLayerData): EditorBrickData[] {
 	const editorBricks: EditorBrickData[] = []
-	
+
 	viewerData.layers.forEach((layer, layerIndex) => {
 		layer.bricks.forEach((viewerBrick) => {
 			// 调整Y坐标以反映层级
@@ -91,11 +91,11 @@ export function viewerLayersToEditor(viewerData: ViewerLayerData): EditorBrickDa
 					viewerBrick.center[2]
 				] as [number, number, number]
 			}
-			
+
 			editorBricks.push(viewerToEditor(adjustedBrick))
 		})
 	})
-	
+
 	return editorBricks
 }
 
@@ -105,7 +105,7 @@ export function viewerLayersToEditor(viewerData: ViewerLayerData): EditorBrickDa
 export function editorToViewerLayers(editorBricks: EditorBrickData[]): ViewerLayerData {
 	// 按Y坐标分组到不同层级
 	const layerMap = new Map<number, ViewerBrickData[]>()
-	
+
 	editorBricks.forEach(editorBrick => {
 		const layerIndex = Math.round(editorBrick.position[1] / 0.02) // 每层间隔2cm
 		const adjustedBrick = {
@@ -116,21 +116,21 @@ export function editorToViewerLayers(editorBricks: EditorBrickData[]): ViewerLay
 				editorBrick.position[2]
 			] as [number, number, number]
 		}
-		
+
 		if (!layerMap.has(layerIndex)) {
 			layerMap.set(layerIndex, [])
 		}
 		layerMap.get(layerIndex)!.push(adjustedBrick)
 	})
-	
+
 	// 转换为展示器格式
 	const layers: { bricks: ViewerBrickData[] }[] = []
 	const sortedLayers = Array.from(layerMap.entries()).sort(([a], [b]) => a - b)
-	
+
 	sortedLayers.forEach(([layerIndex, bricks]) => {
 		layers.push({ bricks })
 	})
-	
+
 	return { layers }
 }
 
@@ -219,7 +219,7 @@ export function validateViewerBrickData(data: any): data is ViewerBrickData {
 export function parseBrickData(jsonString: string): EditorBrickData[] {
 	try {
 		const data = JSON.parse(jsonString)
-		
+
 		// 如果是数组，检查是否为展示器格式
 		if (Array.isArray(data)) {
 			if (data.length > 0 && validateViewerBrickData(data[0])) {
@@ -230,7 +230,7 @@ export function parseBrickData(jsonString: string): EditorBrickData[] {
 				return data
 			}
 		}
-		
+
 		// 如果是对象
 		if (typeof data === 'object') {
 			if (data.layers && Array.isArray(data.layers)) {
@@ -241,7 +241,7 @@ export function parseBrickData(jsonString: string): EditorBrickData[] {
 				return data.bricks
 			}
 		}
-		
+
 		throw new Error('不支持的JSON格式')
 	} catch (error) {
 		console.error('解析积木数据失败:', error)
@@ -263,4 +263,4 @@ export function exportToViewerFormat(editorBricks: EditorBrickData[]): string {
 export function exportToViewerLayersFormat(editorBricks: EditorBrickData[]): string {
 	const viewerLayers = editorToViewerLayers(editorBricks)
 	return JSON.stringify(viewerLayers, null, 2)
-} 
+}

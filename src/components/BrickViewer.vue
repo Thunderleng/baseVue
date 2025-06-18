@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, watch, onUnmounted, nextTick, computed } from 'vue'
 import { useLayerLoader } from '@/composables/useLayerLoader'
 import LayerControls from './LayerControls.vue'
 import * as THREE from 'three'
@@ -38,19 +38,32 @@ import OrientationControls from './OrientationControls.vue'
 // const baseUrl = '/mock' // 本地mock数据路径
 
 // 远程JSON地址列表
-const remoteLayerUrls = [
-	'https://mp-e05e5737-efb0-40a6-9173-e3922ce84754.cdn.bspapp.com/floor/blocks_data_000001.json',
-	'https://mp-e05e5737-efb0-40a6-9173-e3922ce84754.cdn.bspapp.com/floor/blocks_data_000002.json',
-	'https://mp-e05e5737-efb0-40a6-9173-e3922ce84754.cdn.bspapp.com/floor/blocks_data_000003.json',
-	'https://mp-e05e5737-efb0-40a6-9173-e3922ce84754.cdn.bspapp.com/floor/blocks_data_000004.json',
-]
-const maxLayers = remoteLayerUrls.length
+const remoteLayerUrls = computed(() => {
+	// 创建一个从1到154的数组（因为文件从1开始）
+	let _data = Array.from({ length: 154 }, (_, i) => {
+		// 将数字格式化为6位数（例如：000001, 000002, 000123）
+		const formattedNumber = String(i + 1).padStart(6, '0')
+		return `https://mp-e05e5737-efb0-40a6-9173-e3922ce84754.cdn.bspapp.com/step/blocks_data_${formattedNumber}.json`
+	})
+	console.log(_data)
+	return _data
+})
+
+// 最大层数
+const maxLayers = computed(() => remoteLayerUrls.value.length)
 
 // 状态管理
 const currentLayer = ref(0)
-const visibleLayers = ref<boolean[]>(new Array(maxLayers).fill(false))
-const layersData = ref<any[]>(new Array(maxLayers).fill(null))
-const layerLoadingStates = ref<boolean[]>(new Array(maxLayers).fill(false))
+const visibleLayers = ref<boolean[]>([])
+const layersData = ref<any[]>([])
+const layerLoadingStates = ref<boolean[]>([])
+
+// 监听maxLayers变化，初始化数组
+watch(maxLayers, (newValue) => {
+	visibleLayers.value = new Array(newValue).fill(false)
+	layersData.value = new Array(newValue).fill(null)
+	layerLoadingStates.value = new Array(newValue).fill(false)
+}, { immediate: true })
 
 // 性能优化：添加层渲染统计
 const layerRenderStats = ref<{
@@ -299,7 +312,7 @@ function initThreeJS() {
 	scene.add(sideDirLight)
 
 	// 初始化层组
-	layerGroups = new Array(maxLayers).fill(null).map(() => new THREE.Group())
+	layerGroups = new Array(maxLayers.value).fill(null).map(() => new THREE.Group())
 	layerGroups.forEach((group) => scene.add(group))
 
 	// 开始渲染循环
@@ -490,9 +503,6 @@ function fitCameraToScene() {
 
 // 更新层可见性 - 优化版本
 function updateLayerVisibility() {
-	console.log('=== Updating Layer Visibility ===')
-	console.log('Visible layers:', visibleLayers.value)
-
 	let totalVisibleBricks = 0
 	let renderedLayersCount = 0
 
@@ -558,7 +568,7 @@ onMounted(() => {
 
 	// 初始化完成后，设置默认显示前4层进行测试
 	nextTick(() => {
-		for (let i = 0; i < 4 && i < maxLayers; i++) {
+		for (let i = 0; i < 4 && i < maxLayers.value; i++) {
 			visibleLayers.value[i] = true
 		}
 
@@ -602,7 +612,7 @@ function prevLayer() {
 	if (currentLayer.value > 0) {
 		currentLayer.value--
 		// 同步visibleLayers，前N层为true
-		for (let i = 0; i < maxLayers; i++) {
+		for (let i = 0; i < maxLayers.value; i++) {
 			visibleLayers.value[i] = i <= currentLayer.value
 		}
 		// 预加载相邻层
@@ -611,10 +621,10 @@ function prevLayer() {
 }
 
 function nextLayer() {
-	if (currentLayer.value < maxLayers - 1) {
+	if (currentLayer.value < maxLayers.value - 1) {
 		currentLayer.value++
 		// 同步visibleLayers，前N层为true
-		for (let i = 0; i < maxLayers; i++) {
+		for (let i = 0; i < maxLayers.value; i++) {
 			visibleLayers.value[i] = i <= currentLayer.value
 		}
 		// 预加载相邻层
@@ -646,13 +656,13 @@ function updateRenderLayers(newVisibleLayers: boolean[]) {
 
 // 加载指定层的数据 - 优化版本
 async function loadLayerData(layerIndex: number) {
-	if (layerIndex < 0 || layerIndex >= maxLayers) return
+	if (layerIndex < 0 || layerIndex >= maxLayers.value) return
 
 	// 设置加载状态
 	layerLoadingStates.value[layerIndex] = true
 
 	try {
-		const url = remoteLayerUrls[layerIndex]
+		const url = remoteLayerUrls.value[layerIndex]
 		const response = await fetch(url)
 		if (!response.ok) {
 			console.warn(`Layer ${layerIndex + 1} not found: ${url}`)
@@ -685,7 +695,7 @@ async function loadLayerData(layerIndex: number) {
 // 新增：批量层管理功能
 function loadMultipleLayers(startIndex: number, endIndex: number) {
 	const promises = []
-	for (let i = startIndex; i <= endIndex && i < maxLayers; i++) {
+	for (let i = startIndex; i <= endIndex && i < maxLayers.value; i++) {
 		if (!layersData.value[i] && !layerLoadingStates.value[i]) {
 			promises.push(loadLayerData(i))
 		}
@@ -697,7 +707,7 @@ function loadMultipleLayers(startIndex: number, endIndex: number) {
 function preloadAdjacentLayers(currentIndex: number) {
 	const preloadRange = 2 // 预加载前后2层
 	const startIndex = Math.max(0, currentIndex - preloadRange)
-	const endIndex = Math.min(maxLayers - 1, currentIndex + preloadRange)
+	const endIndex = Math.min(maxLayers.value - 1, currentIndex + preloadRange)
 
 	loadMultipleLayers(startIndex, endIndex)
 }
