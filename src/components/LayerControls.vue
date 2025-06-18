@@ -3,27 +3,23 @@
 		class="layer-controls rounded-lg bg-white/90 p-4 shadow-lg backdrop-blur-sm"
 	>
 		<div class="flex flex-col gap-4">
-			<!-- 层导航按钮 -->
-			<div class="flex items-center justify-between">
-				<button
-					:disabled="currentLayer <= 0"
-					class="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-blue-600"
-					@click="$emit('prev-layer')"
-				>
-					前一层
-				</button>
-
-				<span class="text-lg text-gray-700 font-semibold">
-					第 {{ currentLayer + 1 }} 层
-				</span>
-
-				<button
-					:disabled="currentLayer >= maxLayers - 1"
-					class="rounded-lg bg-blue-500 px-4 py-2 text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-blue-600"
-					@click="$emit('next-layer')"
-				>
-					后一层
-				</button>
+			<!-- 性能统计显示 -->
+			<div v-if="renderStats" class="border-t pt-4">
+				<h3 class="mb-3 text-lg text-gray-700 font-semibold">渲染统计</h3>
+				<div class="grid grid-cols-2 gap-2 text-sm">
+					<div class="text-gray-600">
+						总积木数: <span class="font-semibold text-blue-600">{{ renderStats.totalBricks }}</span>
+					</div>
+					<div class="text-gray-600">
+						可见积木: <span class="font-semibold text-green-600">{{ renderStats.visibleBricks }}</span>
+					</div>
+					<div class="text-gray-600">
+						渲染层数: <span class="font-semibold text-purple-600">{{ renderStats.renderedLayers }}</span>
+					</div>
+					<div class="text-gray-600">
+						实例网格: <span class="font-semibold text-orange-600">{{ renderStats.instancedMeshCount || 0 }}</span>
+					</div>
+				</div>
 			</div>
 
 			<!-- 滑动条控制 -->
@@ -48,7 +44,7 @@
 							@input="updateRenderLayers"
 						/>
 						<div class="mt-1 text-center text-sm text-gray-600">
-							渲染前 {{ renderLayers }} 层
+							渲染{{ renderLayers }} 层
 						</div>
 					</div>
 
@@ -61,7 +57,6 @@
 					</button>
 				</div>
 			</div>
-
 			<!-- 视角控制 -->
 			<div class="border-t pt-4">
 				<h3 class="mb-3 text-lg text-gray-700 font-semibold">视角控制</h3>
@@ -88,15 +83,24 @@
 					<label
 						v-for="index in maxLayers"
 						:key="index - 1"
-						class="flex cursor-pointer items-center rounded p-2 space-x-2 hover:bg-gray-100"
+						:class="[
+							'flex cursor-pointer items-center rounded p-2 space-x-2 hover:bg-gray-100',
+							layerLoadingStates && layerLoadingStates[index - 1] ? 'bg-yellow-50' : ''
+						]"
 					>
 						<input
 							type="checkbox"
 							:checked="visibleLayers[index - 1]"
-							class="h-4 w-4 rounded text-blue-600 focus:ring-blue-500"
+							:disabled="layerLoadingStates && layerLoadingStates[index - 1]"
+							class="h-4 w-4 rounded text-blue-600 focus:ring-blue-500 disabled:opacity-50"
 							@change="$emit('toggle-layer', index - 1)"
 						/>
-						<span class="text-sm text-gray-700">第 {{ index }} 层</span>
+						<span class="text-sm text-gray-700">
+							第{{ index }} 层
+							<span v-if="layerLoadingStates && layerLoadingStates[index - 1]" class="text-yellow-600">
+								(加载中...)
+							</span>
+						</span>
 					</label>
 				</div>
 			</div>
@@ -136,11 +140,18 @@ interface Props {
 	maxLayers: number
 	visibleLayers: boolean[]
 	isLoading?: boolean
+	renderStats?: {
+		totalBricks: number
+		visibleBricks: number
+		renderedLayers: number
+		instancedMeshCount?: number
+	}
+	layerLoadingStates?: boolean[]
 }
 
 const props = defineProps<Props>()
 
-const renderLayers = ref(1) // 默认渲染1层
+const renderLayers = ref(4) // 默认渲染4层
 
 // 更新渲染层数
 function updateRenderLayers(event: Event) {

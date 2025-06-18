@@ -4,38 +4,34 @@
 		<div ref="containerRef" class="h-full w-full"></div>
 
 		<!-- 控制面板 -->
-		<LayerControls
-			:current-layer="currentLayer"
-			:max-layers="maxLayers"
-			:visible-layers="visibleLayers"
-			:is-loading="isLoading"
-			@prev-layer="prevLayer"
-			@next-layer="nextLayer"
-			@toggle-layer="toggleLayer"
-			@select-all="selectAll"
-			@deselect-all="deselectAll"
-			@reset-view="resetView"
-			@fit-view="fitCameraToScene"
-			@update-render-layers="updateRenderLayers"
-		/>
+		<LayerControls :current-layer="currentLayer" :max-layers="maxLayers" :visible-layers="visibleLayers"
+			:is-loading="isLoading" :render-stats="layerRenderStats" :layer-loading-states="layerLoadingStates"
+			@prev-layer="prevLayer" @next-layer="nextLayer" @toggle-layer="toggleLayer" @select-all="selectAll"
+			@deselect-all="deselectAll" @reset-view="resetView" @fit-view="fitCameraToScene"
+			@update-render-layers="updateRenderLayers" />
 
+		<!-- 朝向控制面板 -->
+		<div class="absolute right-4 top-4">
+			<OrientationControls :current-orientation="globalOrientation" :rotation-x="globalRotationX"
+				:rotation-y="globalRotationY" :rotation-z="globalRotationZ" @set-orientation="setGlobalOrientation"
+				@set-rotation="setGlobalRotation" @reset-orientation="resetOrientation" />
+		</div>
 		<!-- 错误提示 -->
-		<div
-			v-if="error"
-			class="absolute right-4 top-4 rounded-lg bg-red-500 px-4 py-2 text-white shadow-lg"
-		>
+		<div v-if="error" class="absolute right-4 top-4 rounded-lg bg-red-500 px-4 py-2 text-white shadow-lg">
 			{{ error }}
 		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, onUnmounted } from 'vue'
+import { ref, onMounted, watch, onUnmounted, nextTick } from 'vue'
 import { useLayerLoader } from '@/composables/useLayerLoader'
 import LayerControls from './LayerControls.vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils'
+import { BrickOrientation, RotationAxis } from '@/models/Brick'
+import OrientationControls from './OrientationControls.vue'
 
 // 配置
 // const maxLayers = 2 // 最大层数，使用本地mock数据
@@ -54,6 +50,18 @@ const maxLayers = remoteLayerUrls.length
 const currentLayer = ref(0)
 const visibleLayers = ref<boolean[]>(new Array(maxLayers).fill(false))
 const layersData = ref<any[]>(new Array(maxLayers).fill(null))
+const layerLoadingStates = ref<boolean[]>(new Array(maxLayers).fill(false))
+
+// 性能优化：添加层渲染统计
+const layerRenderStats = ref<{
+	totalBricks: number
+	visibleBricks: number
+	renderedLayers: number
+}>({
+	totalBricks: 0,
+	visibleBricks: 0,
+	renderedLayers: 0,
+})
 
 // Three.js 相关
 const containerRef = ref<HTMLElement>()
@@ -74,8 +82,17 @@ interface BrickType {
 const brickTypeCache = new Map<string, BrickType>()
 const instancedMeshes = new Map<string, THREE.InstancedMesh>()
 
+// 新增：为每层创建独立的InstancedMesh缓存
+const layerInstancedMeshes = new Map<string, THREE.InstancedMesh>()
+
 // 使用层加载器
 const { isLoading, error } = useLayerLoader()
+
+// 朝向控制状态
+const globalOrientation = ref<BrickOrientation>(BrickOrientation.EAST)
+const globalRotationX = ref<number>(0)
+const globalRotationY = ref<number>(0)
+const globalRotationZ = ref<number>(0)
 
 // 获取积木类型键
 function getBrickTypeKey(brickData: any): string {
@@ -117,8 +134,8 @@ function createBrickGeometry(
 	// 直接创建合并的几何体，不使用Group
 	const geometries: THREE.BufferGeometry[] = []
 
-	// 添加小的间隙来增强分割效果
-	const gap = 0.001 // 1mm的间隙
+	// 减小间隙，让积木间隔更小
+	const gap = 0.0005 // 从0.001减小到0.0005，积木间隔更小
 
 	// 1. 创建底部正方体/长方体
 	const baseWidth = brickData.size * brickType.shape[0] - gap
@@ -166,14 +183,16 @@ function createBrickGeometry(
 	}
 }
 
-// 创建或获取InstancedMesh
+// 创建或获取InstancedMesh - 修复版本，为每层创建独立实例
 function getOrCreateInstancedMesh(
 	brickType: BrickType,
 	brickData: any,
+	layerIndex: number,
 ): THREE.InstancedMesh {
 	const key = getBrickTypeKey(brickData)
+	const layerKey = `${key}_layer_${layerIndex}`
 
-	if (!instancedMeshes.has(key)) {
+	if (!layerInstancedMeshes.has(layerKey)) {
 		const geometry = createBrickGeometry(brickType, brickData)
 
 		// 增强材质设置，让积木边界更明显
@@ -195,10 +214,10 @@ function getOrCreateInstancedMesh(
 		instancedMesh.castShadow = true
 		instancedMesh.receiveShadow = true
 
-		instancedMeshes.set(key, instancedMesh)
+		layerInstancedMeshes.set(layerKey, instancedMesh)
 	}
 
-	return instancedMeshes.get(key)!
+	return layerInstancedMeshes.get(layerKey)!
 }
 
 // 初始化Three.js场景
@@ -294,22 +313,41 @@ function animate() {
 	renderer.render(scene, camera)
 }
 
-// 渲染积木层（使用InstancedMesh）
+// 渲染积木层（使用InstancedMesh）- 修复版本，添加朝向控制
 function renderBrickLayer(layerIndex: number, bricks: any[]) {
-	if (!layerGroups[layerIndex]) return
+	if (!layerGroups[layerIndex]) {
+		console.error(`Layer group ${layerIndex} not found!`)
+		return
+	}
+
+	console.log(`=== Rendering Layer ${layerIndex + 1} ===`)
+	console.log(`Layer group exists:`, !!layerGroups[layerIndex])
+	console.log(`Layer group visible:`, layerGroups[layerIndex].visible)
+	console.log(`Bricks count:`, bricks.length)
+	console.log(`Global orientation:`, globalOrientation.value)
 
 	// 清空当前层
 	layerGroups[layerIndex].clear()
+	console.log(`Cleared layer ${layerIndex + 1}, children count:`, layerGroups[layerIndex].children.length)
 
 	// 按类型分组积木
 	const bricksByType = new Map<string, any[]>()
 
 	bricks.forEach((brickData) => {
-		const key = getBrickTypeKey(brickData)
+		// 应用全局朝向设置
+		const enhancedBrickData = {
+			...brickData,
+			orientation: globalOrientation.value,
+			rotationX: globalRotationX.value,
+			rotationY: globalRotationY.value,
+			rotationZ: globalRotationZ.value,
+		}
+
+		const key = getBrickTypeKey(enhancedBrickData)
 		if (!bricksByType.has(key)) {
 			bricksByType.set(key, [])
 		}
-		bricksByType.get(key)!.push(brickData)
+		bricksByType.get(key)!.push(enhancedBrickData)
 	})
 
 	console.log(
@@ -325,7 +363,10 @@ function renderBrickLayer(layerIndex: number, bricks: any[]) {
 
 		const firstBrick = bricksOfType[0]
 		const brickType = getBrickType(firstBrick)
-		const instancedMesh = getOrCreateInstancedMesh(brickType, firstBrick)
+		// 为每层创建独立的InstancedMesh
+		const instancedMesh = getOrCreateInstancedMesh(brickType, firstBrick, layerIndex)
+
+		console.log(`Created InstancedMesh for layer ${layerIndex + 1}, type: ${getBrickTypeKey(firstBrick)}`)
 
 		// 设置实例矩阵
 		bricksOfType.forEach((brickData, index) => {
@@ -336,19 +377,47 @@ function renderBrickLayer(layerIndex: number, bricks: any[]) {
 			const y = brickData.center[2] // JSON的z轴映射到Three.js的y轴
 			const z = brickData.center[1] // JSON的y轴映射到Three.js的z轴
 
-			// 设置位置
-			matrix.setPosition(x, y, z)
+			// 应用位置微调，让积木更紧密
+			const positionOffset = 0.0002 // 微调偏移量
+			matrix.setPosition(x + positionOffset, y + positionOffset, z + positionOffset)
 
 			// 调试信息（只显示前几个积木）
 			if (index < 3) {
 				console.log(
-					`Brick ${index}: JSON [${brickData.center.join(', ')}] -> Three.js [${x}, ${y}, ${z}]`,
+					`Layer ${layerIndex + 1} Brick ${index}: JSON [${brickData.center.join(', ')}] -> Three.js [${x}, ${y}, ${z}]`,
 				)
 			}
 
-			// 设置旋转（Y轴旋转90度）
+			// 应用旋转矩阵
 			const rotationMatrix = new THREE.Matrix4()
+
+			// 基础旋转（Y轴旋转90度）
 			rotationMatrix.makeRotationY(Math.PI / 2)
+
+			// 朝向旋转
+			const orientationRotation = new THREE.Matrix4()
+			orientationRotation.makeRotationY((brickData.orientation * Math.PI) / 180)
+			rotationMatrix.multiply(orientationRotation)
+
+			// 全局旋转
+			if (brickData.rotationX !== 0) {
+				const xRotation = new THREE.Matrix4()
+				xRotation.makeRotationX((brickData.rotationX * Math.PI) / 180)
+				rotationMatrix.multiply(xRotation)
+			}
+
+			if (brickData.rotationY !== 0) {
+				const yRotation = new THREE.Matrix4()
+				yRotation.makeRotationY((brickData.rotationY * Math.PI) / 180)
+				rotationMatrix.multiply(yRotation)
+			}
+
+			if (brickData.rotationZ !== 0) {
+				const zRotation = new THREE.Matrix4()
+				zRotation.makeRotationZ((brickData.rotationZ * Math.PI) / 180)
+				rotationMatrix.multiply(zRotation)
+			}
+
 			matrix.multiply(rotationMatrix)
 
 			instancedMesh.setMatrixAt(index, matrix)
@@ -360,11 +429,13 @@ function renderBrickLayer(layerIndex: number, bricks: any[]) {
 
 		// 添加到层组
 		layerGroups[layerIndex].add(instancedMesh)
+		console.log(`Added InstancedMesh to layer ${layerIndex + 1}, total children:`, layerGroups[layerIndex].children.length)
 	})
 
 	console.log(
-		`Rendered layer ${layerIndex + 1} with ${bricks.length} bricks using InstancedMesh`,
+		`=== Completed rendering layer ${layerIndex + 1} with ${bricks.length} bricks ===`,
 	)
+	console.log(`Final layer children count:`, layerGroups[layerIndex].children.length)
 }
 
 // 重置视角函数
@@ -417,24 +488,55 @@ function fitCameraToScene() {
 	}
 }
 
-// 更新层可见性
+// 更新层可见性 - 优化版本
 function updateLayerVisibility() {
+	console.log('=== Updating Layer Visibility ===')
+	console.log('Visible layers:', visibleLayers.value)
+
+	let totalVisibleBricks = 0
+	let renderedLayersCount = 0
+
 	visibleLayers.value.forEach((visible, index) => {
+		console.log(`Layer ${index + 1}: visible=${visible}, hasData=${!!layersData.value[index]}`)
+
 		if (layerGroups[index]) {
 			layerGroups[index].visible = visible
-		}
-		if (visible) {
-			if (layersData.value[index]) {
-				// 已有数据，直接渲染
-				renderBrickLayer(index, layersData.value[index])
-			} else {
-				// 没有数据，先加载
-				loadLayerData(index)
+			console.log(`Set layer ${index + 1} visible to:`, visible)
+
+			if (visible) {
+				renderedLayersCount++
+				if (layersData.value[index]) {
+					// 已有数据，直接渲染
+					console.log(`Rendering existing data for layer ${index + 1}`)
+					renderBrickLayer(index, layersData.value[index])
+					totalVisibleBricks += layersData.value[index].length
+				} else {
+					// 没有数据，先加载
+					console.log(`Loading data for layer ${index + 1}`)
+					loadLayerData(index)
+				}
 			}
+		} else {
+			console.error(`Layer group ${index} not found!`)
 		}
 	})
-	// 不再自动调整视角
-	// fitCameraToScene()
+
+	// 更新渲染统计
+	layerRenderStats.value = {
+		totalBricks: layersData.value.reduce((sum, layer) => sum + (layer?.length || 0), 0),
+		visibleBricks: totalVisibleBricks,
+		renderedLayers: renderedLayersCount,
+	}
+
+	console.log(`=== Layer visibility update complete ===`)
+	console.log(`Total visible bricks: ${totalVisibleBricks}`)
+	console.log(`Rendered layers: ${renderedLayersCount}`)
+
+	// 性能优化：如果渲染的积木数量过多，自动调整视角
+	if (totalVisibleBricks > 1000) {
+		console.log(`Performance warning: Rendering ${totalVisibleBricks} bricks across ${renderedLayersCount} layers`)
+		// 可以在这里添加性能优化逻辑
+	}
 }
 
 // 窗口大小调整处理
@@ -452,10 +554,21 @@ function handleResize() {
 
 // 初始化
 onMounted(() => {
-	// 默认显示第一层
-	visibleLayers.value[0] = true
 	initThreeJS()
-	loadCurrentLayer()
+
+	// 初始化完成后，设置默认显示前4层进行测试
+	nextTick(() => {
+		for (let i = 0; i < 4 && i < maxLayers; i++) {
+			visibleLayers.value[i] = true
+		}
+
+		// 加载所有可见层的数据
+		visibleLayers.value.forEach((visible, index) => {
+			if (visible) {
+				loadLayerData(index)
+			}
+		})
+	})
 
 	// 添加窗口大小调整监听
 	window.addEventListener('resize', handleResize)
@@ -484,7 +597,7 @@ async function loadCurrentLayer() {
 	}
 }
 
-// 层导航
+// 优化：层导航函数
 function prevLayer() {
 	if (currentLayer.value > 0) {
 		currentLayer.value--
@@ -492,6 +605,8 @@ function prevLayer() {
 		for (let i = 0; i < maxLayers; i++) {
 			visibleLayers.value[i] = i <= currentLayer.value
 		}
+		// 预加载相邻层
+		preloadAdjacentLayers(currentLayer.value)
 	}
 }
 
@@ -502,6 +617,8 @@ function nextLayer() {
 		for (let i = 0; i < maxLayers; i++) {
 			visibleLayers.value[i] = i <= currentLayer.value
 		}
+		// 预加载相邻层
+		preloadAdjacentLayers(currentLayer.value)
 	}
 }
 
@@ -527,9 +644,12 @@ function updateRenderLayers(newVisibleLayers: boolean[]) {
 	})
 }
 
-// 加载指定层的数据
+// 加载指定层的数据 - 优化版本
 async function loadLayerData(layerIndex: number) {
 	if (layerIndex < 0 || layerIndex >= maxLayers) return
+
+	// 设置加载状态
+	layerLoadingStates.value[layerIndex] = true
 
 	try {
 		const url = remoteLayerUrls[layerIndex]
@@ -541,6 +661,7 @@ async function loadLayerData(layerIndex: number) {
 
 		const bricks = await response.json()
 		layersData.value[layerIndex] = bricks // 存储数据
+
 		console.log(
 			`Loading layer ${layerIndex + 1} with ${bricks.length} bricks from ${url}`,
 		)
@@ -548,13 +669,37 @@ async function loadLayerData(layerIndex: number) {
 		// 使用InstancedMesh渲染
 		renderBrickLayer(layerIndex, bricks)
 
-		// 不再自动调整视角
-		// nextTick(() => {
-		//   fitCameraToScene()
-		// })
+		// 更新统计信息
+		layerRenderStats.value.totalBricks = layersData.value.reduce(
+			(sum, layer) => sum + (layer?.length || 0),
+			0
+		)
+
 	} catch (error) {
 		console.error(`Error loading layer ${layerIndex + 1}:`, error)
+	} finally {
+		layerLoadingStates.value[layerIndex] = false
 	}
+}
+
+// 新增：批量层管理功能
+function loadMultipleLayers(startIndex: number, endIndex: number) {
+	const promises = []
+	for (let i = startIndex; i <= endIndex && i < maxLayers; i++) {
+		if (!layersData.value[i] && !layerLoadingStates.value[i]) {
+			promises.push(loadLayerData(i))
+		}
+	}
+	return Promise.all(promises)
+}
+
+// 新增：智能层预加载
+function preloadAdjacentLayers(currentIndex: number) {
+	const preloadRange = 2 // 预加载前后2层
+	const startIndex = Math.max(0, currentIndex - preloadRange)
+	const endIndex = Math.min(maxLayers - 1, currentIndex + preloadRange)
+
+	loadMultipleLayers(startIndex, endIndex)
 }
 
 // 全选/取消全选
@@ -573,12 +718,75 @@ function deselectAll() {
 	visibleLayers.value = visibleLayers.value.map(() => false)
 }
 
+// 新增：设置全局朝向
+function setGlobalOrientation(orientation: BrickOrientation) {
+	globalOrientation.value = orientation
+	console.log(`Setting global orientation to:`, orientation)
+
+	// 重新渲染所有可见层
+	visibleLayers.value.forEach((visible, index) => {
+		if (visible && layersData.value[index]) {
+			renderBrickLayer(index, layersData.value[index])
+		}
+	})
+}
+
+// 新增：设置全局旋转
+function setGlobalRotation(axis: RotationAxis, angle: number) {
+	switch (axis) {
+		case RotationAxis.X:
+			globalRotationX.value = angle
+			break
+		case RotationAxis.Y:
+			globalRotationY.value = angle
+			break
+		case RotationAxis.Z:
+			globalRotationZ.value = angle
+			break
+	}
+
+	console.log(`Setting global rotation ${axis} to:`, angle)
+
+	// 重新渲染所有可见层
+	visibleLayers.value.forEach((visible, index) => {
+		if (visible && layersData.value[index]) {
+			renderBrickLayer(index, layersData.value[index])
+		}
+	})
+}
+
+// 新增：重置朝向和旋转
+function resetOrientation() {
+	globalOrientation.value = BrickOrientation.EAST
+	globalRotationX.value = 0
+	globalRotationY.value = 0
+	globalRotationZ.value = 0
+
+	console.log('Reset orientation and rotation')
+
+	// 重新渲染所有可见层
+	visibleLayers.value.forEach((visible, index) => {
+		if (visible && layersData.value[index]) {
+			renderBrickLayer(index, layersData.value[index])
+		}
+	})
+}
+
 // 清理资源
 onUnmounted(() => {
 	// 移除事件监听
 	window.removeEventListener('resize', handleResize)
 
 	// 清理InstancedMesh
+	layerInstancedMeshes.forEach((mesh) => {
+		mesh.geometry.dispose()
+		if (mesh.material instanceof THREE.Material) {
+			mesh.material.dispose()
+		}
+	})
+	layerInstancedMeshes.clear()
+
+	// 清理旧的缓存（如果存在）
 	instancedMeshes.forEach((mesh) => {
 		mesh.geometry.dispose()
 		if (mesh.material instanceof THREE.Material) {
