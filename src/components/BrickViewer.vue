@@ -6,6 +6,7 @@
 		<!-- 控制面板 -->
 		<LayerControls :current-layer="currentLayer" :max-layers="maxLayers" :visible-layers="visibleLayers"
 			:is-loading="isLoading" :render-stats="layerRenderStats" :layer-loading-states="layerLoadingStates"
+			:is-layer-loading="isLayerLoading"
 			@prev-layer="prevLayer" @next-layer="nextLayer" @toggle-layer="toggleLayer" @select-all="selectAll"
 			@deselect-all="deselectAll" @reset-view="resetView" @fit-view="fitCameraToScene"
 			@update-render-layers="updateRenderLayers" />
@@ -57,6 +58,7 @@ const currentLayer = ref(0)
 const visibleLayers = ref<boolean[]>([])
 const layersData = ref<any[]>([])
 const layerLoadingStates = ref<boolean[]>([])
+const isLayerLoading = ref(false) // 新增：是否有层正在加载
 
 // 监听maxLayers变化，初始化数组
 watch(maxLayers, (newValue) => {
@@ -634,29 +636,99 @@ function nextLayer() {
 
 // 层切换
 function toggleLayer(index: number) {
+	// 如果正在加载，阻止操作
+	if (isLayerLoading.value) {
+		console.log('层数据正在加载中，阻止层切换操作')
+		return
+	}
+	
 	visibleLayers.value[index] = !visibleLayers.value[index]
 
 	// 如果切换的是当前层，自动加载数据
 	if (visibleLayers.value[index] && !layersData.value[index]) {
-		loadLayerData(index)
+		isLayerLoading.value = true
+		loadLayerData(index).finally(() => {
+			isLayerLoading.value = false
+			console.log(`层 ${index + 1} 切换加载完成`)
+		})
 	}
 }
 
-// 更新渲染层数（滑动条控制）
+// 更新渲染层数（滑动条控制）- 优化版本，支持防抖
 function updateRenderLayers(newVisibleLayers: boolean[]) {
-	visibleLayers.value = [...newVisibleLayers]
-
-	// 加载所有新显示的层
-	visibleLayers.value.forEach((visible, index) => {
-		if (visible && !layersData.value[index]) {
-			loadLayerData(index)
+	console.log('更新渲染层数:', newVisibleLayers.filter(v => v).length, '层')
+	
+	// 如果正在加载，阻止新的操作
+	if (isLayerLoading.value) {
+		console.log('层数据正在加载中，忽略新的渲染请求')
+		return
+	}
+	
+	// 找出需要加载的新层
+	const layersToLoad: number[] = []
+	const layersToUnload: number[] = []
+	
+	newVisibleLayers.forEach((visible, index) => {
+		if (visible && !visibleLayers.value[index]) {
+			// 新显示的层
+			layersToLoad.push(index)
+		} else if (!visible && visibleLayers.value[index]) {
+			// 新隐藏的层
+			layersToUnload.push(index)
 		}
 	})
+	
+	// 更新可见性状态
+	visibleLayers.value = [...newVisibleLayers]
+	
+	// 隐藏不需要的层
+	layersToUnload.forEach(index => {
+		if (layerGroups[index]) {
+			layerGroups[index].visible = false
+		}
+	})
+	
+	// 批量加载新层（防抖处理）
+	if (layersToLoad.length > 0) {
+		console.log(`需要加载 ${layersToLoad.length} 层:`, layersToLoad)
+		
+		// 设置加载状态
+		isLayerLoading.value = true
+		
+		// 使用防抖加载：每次只加载一层，间隔100ms
+		let loadedCount = 0
+		layersToLoad.forEach((index, i) => {
+			setTimeout(() => {
+				if (!layersData.value[index] && !layerLoadingStates.value[index]) {
+					loadLayerData(index).finally(() => {
+						loadedCount++
+						// 检查是否所有层都加载完成
+						if (loadedCount === layersToLoad.length) {
+							isLayerLoading.value = false
+							console.log('所有层加载完成')
+						}
+					})
+				} else {
+					loadedCount++
+					// 检查是否所有层都加载完成
+					if (loadedCount === layersToLoad.length) {
+						isLayerLoading.value = false
+						console.log('所有层加载完成')
+					}
+				}
+			}, i * 100) // 每层间隔100ms
+		})
+	} else {
+		// 没有需要加载的层，直接更新渲染统计
+		updateLayerVisibility()
+	}
 }
 
 // 加载指定层的数据 - 优化版本
-async function loadLayerData(layerIndex: number) {
-	if (layerIndex < 0 || layerIndex >= maxLayers.value) return
+async function loadLayerData(layerIndex: number): Promise<void> {
+	if (layerIndex < 0 || layerIndex >= maxLayers.value) {
+		return Promise.resolve()
+	}
 
 	// 设置加载状态
 	layerLoadingStates.value[layerIndex] = true
@@ -687,6 +759,7 @@ async function loadLayerData(layerIndex: number) {
 
 	} catch (error) {
 		console.error(`Error loading layer ${layerIndex + 1}:`, error)
+		throw error // 重新抛出错误，让调用者知道加载失败
 	} finally {
 		layerLoadingStates.value[layerIndex] = false
 	}
@@ -714,14 +787,38 @@ function preloadAdjacentLayers(currentIndex: number) {
 
 // 全选/取消全选
 function selectAll() {
+	// 如果正在加载，阻止操作
+	if (isLayerLoading.value) {
+		console.log('层数据正在加载中，阻止全选操作')
+		return
+	}
+	
 	visibleLayers.value = visibleLayers.value.map(() => true)
 
 	// 加载所有未加载的层
+	const layersToLoad: number[] = []
 	visibleLayers.value.forEach((visible, index) => {
 		if (visible && !layersData.value[index]) {
-			loadLayerData(index)
+			layersToLoad.push(index)
 		}
 	})
+	
+	if (layersToLoad.length > 0) {
+		isLayerLoading.value = true
+		let loadedCount = 0
+		
+		layersToLoad.forEach((index, i) => {
+			setTimeout(() => {
+				loadLayerData(index).finally(() => {
+					loadedCount++
+					if (loadedCount === layersToLoad.length) {
+						isLayerLoading.value = false
+						console.log('全选加载完成')
+					}
+				})
+			}, i * 100)
+		})
+	}
 }
 
 function deselectAll() {
