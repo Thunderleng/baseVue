@@ -27,7 +27,7 @@
 				<h3 class="mb-3 text-lg text-gray-700 font-semibold">层数控制</h3>
 				<div class="flex items-center gap-3">
 					<button
-						:disabled="renderLayers <= 1"
+						:disabled="renderLayers <= 1 || props.isLayerLoading"
 						class="rounded bg-orange-500 px-3 py-1 text-sm text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-orange-600"
 						@click="decreaseRenderLayers"
 					>
@@ -40,16 +40,26 @@
 							:min="1"
 							:max="maxLayers"
 							:value="renderLayers"
-							class="slider h-2 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
+							:disabled="props.isLayerLoading"
+							:class="[
+								'slider h-2 w-full appearance-none rounded-lg',
+								props.isLayerLoading ? 'bg-gray-300 cursor-not-allowed' : 'bg-gray-200 cursor-pointer'
+							]"
 							@input="updateRenderLayers"
 						/>
 						<div class="mt-1 text-center text-sm text-gray-600">
 							渲染{{ renderLayers }} 层
+							<span v-if="isRenderDebouncing" class="text-orange-500 ml-2">
+								(防抖中...)
+							</span>
+							<span v-if="props.isLayerLoading" class="text-red-500 ml-2">
+								(加载中，请稍候...)
+							</span>
 						</div>
 					</div>
 
 					<button
-						:disabled="renderLayers >= maxLayers"
+						:disabled="renderLayers >= maxLayers || props.isLayerLoading"
 						class="rounded bg-orange-500 px-3 py-1 text-sm text-white transition-colors disabled:cursor-not-allowed disabled:bg-gray-300 hover:bg-orange-600"
 						@click="increaseRenderLayers"
 					>
@@ -79,19 +89,29 @@
 			<!-- 层选择复选框 -->
 			<div class="border-t pt-4">
 				<h3 class="mb-3 text-lg text-gray-700 font-semibold">层选择</h3>
+				
+				<!-- 全局加载状态提示 -->
+				<div v-if="props.isLayerLoading" class="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
+					<div class="flex items-center">
+						<div class="mr-2 h-4 w-4 animate-spin border-2 border-yellow-600 border-t-transparent rounded-full"></div>
+						正在加载层数据，请稍候...
+					</div>
+				</div>
+				
 				<div class="grid grid-cols-2 max-h-40 gap-2 overflow-y-auto">
 					<label
 						v-for="index in maxLayers"
 						:key="index - 1"
 						:class="[
 							'flex cursor-pointer items-center rounded p-2 space-x-2 hover:bg-gray-100',
-							layerLoadingStates && layerLoadingStates[index - 1] ? 'bg-yellow-50' : ''
+							layerLoadingStates && layerLoadingStates[index - 1] ? 'bg-yellow-50' : '',
+							props.isLayerLoading ? 'opacity-50 cursor-not-allowed' : ''
 						]"
 					>
 						<input
 							type="checkbox"
 							:checked="visibleLayers[index - 1]"
-							:disabled="layerLoadingStates && layerLoadingStates[index - 1]"
+							:disabled="(layerLoadingStates && layerLoadingStates[index - 1]) || props.isLayerLoading"
 							class="h-4 w-4 rounded text-blue-600 focus:ring-blue-500 disabled:opacity-50"
 							@change="$emit('toggle-layer', index - 1)"
 						/>
@@ -108,13 +128,15 @@
 			<!-- 全选/取消全选 -->
 			<div class="flex gap-2">
 				<button
-					class="rounded bg-green-500 px-3 py-1 text-sm text-white transition-colors hover:bg-green-600"
+					:disabled="props.isLayerLoading"
+					class="rounded bg-green-500 px-3 py-1 text-sm text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:bg-gray-300"
 					@click="$emit('select-all')"
 				>
 					全选
 				</button>
 				<button
-					class="rounded bg-red-500 px-3 py-1 text-sm text-white transition-colors hover:bg-red-600"
+					:disabled="props.isLayerLoading"
+					class="rounded bg-red-500 px-3 py-1 text-sm text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-gray-300"
 					@click="$emit('deselect-all')"
 				>
 					取消全选
@@ -134,6 +156,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useDebouncedValue } from '@/composables/useDebounce'
 
 interface Props {
 	currentLayer: number
@@ -147,51 +170,75 @@ interface Props {
 		instancedMeshCount?: number
 	}
 	layerLoadingStates?: boolean[]
+	isLayerLoading?: boolean
 }
 
 const props = defineProps<Props>()
 
-const renderLayers = ref(4) // 默认渲染4层
+// 使用防抖值来管理渲染层数
+const { 
+	value: renderLayers, 
+	debouncedValue: debouncedRenderLayers,
+	setValue: setRenderLayers,
+	setValueImmediate: setRenderLayersImmediate,
+	isDebouncing: isRenderDebouncing
+} = useDebouncedValue(4, 200) // 200ms防抖延迟
 
-// 更新渲染层数
+// 更新渲染层数（带防抖）
 function updateRenderLayers(event: Event) {
+	// 如果正在加载层数据，阻止操作
+	if (props.isLayerLoading) {
+		console.log('层数据正在加载中，阻止滑动操作')
+		return
+	}
+	
 	const target = event.target as HTMLInputElement
-	renderLayers.value = parseInt(target.value)
-	updateVisibleLayers()
+	const newValue = parseInt(target.value)
+	setRenderLayers(newValue)
 }
 
-// 增加渲染层数
+// 增加渲染层数（立即执行，不防抖）
 function increaseRenderLayers() {
 	if (renderLayers.value < props.maxLayers) {
-		renderLayers.value++
-		updateVisibleLayers()
+		const newValue = renderLayers.value + 1
+		setRenderLayersImmediate(newValue)
+		updateVisibleLayers(newValue)
 	}
 }
 
-// 减少渲染层数
+// 减少渲染层数（立即执行，不防抖）
 function decreaseRenderLayers() {
 	if (renderLayers.value > 1) {
-		renderLayers.value--
-		updateVisibleLayers()
+		const newValue = renderLayers.value - 1
+		setRenderLayersImmediate(newValue)
+		updateVisibleLayers(newValue)
 	}
 }
 
 // 更新可见层
-function updateVisibleLayers() {
+function updateVisibleLayers(layerCount?: number) {
+	const count = layerCount ?? debouncedRenderLayers.value
 	const newVisibleLayers = new Array(props.maxLayers).fill(false)
-	for (let i = 0; i < renderLayers.value; i++) {
+	for (let i = 0; i < count; i++) {
 		newVisibleLayers[i] = true
 	}
 	emit('update-render-layers', newVisibleLayers)
 }
+
+// 监听防抖后的渲染层数变化
+watch(debouncedRenderLayers, (newValue) => {
+	console.log(`防抖后更新渲染层数: ${newValue}`)
+	updateVisibleLayers(newValue)
+})
 
 // 监听当前层变化，自动调整渲染层数
 watch(
 	() => props.currentLayer,
 	(newLayer) => {
 		if (newLayer >= renderLayers.value) {
-			renderLayers.value = newLayer + 1
-			updateVisibleLayers()
+			const newValue = newLayer + 1
+			setRenderLayersImmediate(newValue)
+			updateVisibleLayers(newValue)
 		}
 	},
 )
