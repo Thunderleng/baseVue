@@ -61,5 +61,12 @@
   },
   "[json]": {
     "editor.defaultFormatter": "vscode.json-language-features"
+  },
+  "workbench.colorCustomizations": {
+    "editorCursor.foreground": "#FF0000",
+    "terminalCursor.foreground": "#FF0000",
+    "activityBar.background": "#4F1E1B",
+    "titleBar.activeBackground": "#6F2A26",
+    "titleBar.activeForeground": "#FEFCFC"
   }
 }
